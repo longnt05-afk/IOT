@@ -1,0 +1,108 @@
+Project: SmartGarageV2 — Luồng chạy chính và kịch bản
+
+1) Tổng quan chức năng
+- Quản lý cửa gara (motor).
+- Quét thẻ RFID để cấp quyền mở/đóng.
+- Cảnh báo và xử lý ngập ngoài (servo mở cửa thoát nước).
+- Phát hiện ngập trong gara (cảm biến siêu âm) và bật/tắt bơm.
+- Đọc cảm biến DHT (nhiệt độ, độ ẩm) và hiển thị/đẩy dữ liệu lên Blynk.
+- Hiển thị thông báo trên LCD.
+- Giao tiếp và điều khiển từ ứng dụng Blynk (bao gồm callback VPIN_GARAGE_DOOR).
+- Còi báo khi truy cập thất bại.
+
+2) Các module chính (tệp/đơn vị)
+- `app_manager.cpp`      : Luồng khởi tạo và vòng lặp chính.
+- `config.h`, `secrets_data.h` : Cấu hình, hằng số.
+- `lcd_module.h`         : Hiển thị LCD.
+- `dht_module.h`         : Đọc DHT.
+- `blynk_module.h`       : Kết nối & gửi/nhận dữ liệu Blynk.
+- `rfid_module.h`        : Quét và đọc UID thẻ.
+- `servo_module.h`       : Điều khiển servo (cửa thoát nước).
+- `ultrasonic_module.h`  : Đọc khoảng cách (ngoài & trong gara).
+- `motor_module.h`       : Điều khiển motor cửa gara.
+- `buzz_module.h`        : Phát âm thanh báo lỗi.
+- `Blynk/BlynkHandlers.h`: Xử lý callback Blynk bổ sung.
+
+3) Khởi tạo (app_setup)
+- Serial.begin
+- Khởi tạo các module phần cứng: LCD, DHT, RFID, Servos, Ultrasonic, Motors, Buzzer
+- Khởi tạo Blynk (WiFi + Blynk)
+- Hiển thị màn chào trên LCD
+
+4) Vòng lặp chính (app_loop) — thứ tự xử lý
+1
+- Luôn chạy `runBlynk()` và `motor_loop()`.
+- Quản lý trạng thái hiển thị LCD khi có thông báo (STATE_ACCESS_MSG -> timeout LCD_MSG_DURATION -> STATE_IDLE).
+- Nếu đang STATE_IDLE: kiểm tra `checkNewCardUID()`:
+  - Nếu phát hiện UID:
+    - Nếu `isFamilyCard(uid) == true`:
+      - Hiển thị "THE HOP LE", toggle cửa (`toggleGarageDoor()`), gửi event lên Blynk (`sendBlynkLogEvent`), sync trạng thái (`syncGarageDoorState`), chuyển `currentState = STATE_ACCESS_MSG`, lưu `messageDisplayTime`, `return` (dừng vòng lặp lần này).
+    - Nếu không hợp lệ:
+      - `beepFail()`, hiển thị "THE KHONG HOP LE", đặt `STATE_ACCESS_MSG`, cập nhật `messageDisplayTime`, `return`.
+2
+- Kiểm tra cảm biến chống ngập ngoài với khoảng thời gian thay đổi:
+  - Nếu khoảng cách <= `FLOOD_TRIGGER_DISTANCE_CM` -> mở servo cửa thoát nước (`setFloodDoorAngle(FLOOD_SERVO_OPEN_ANGLE)`), đánh dấu `isFlooded = true`, gửi log Blynk.
+  - Ngược lại -> đóng servo, nếu trước đó `isFlooded == true` -> gửi sự kiện rút nước.
+  - Gửi dữ liệu flood lên Blynk (`sendFloodDataToBlynk`).
+3
+- Đọc DHT theo `DHT_READ_INTERVAL`:
+  - Gửi dữ liệu DHT lên Blynk (`sendDHTDataToBlynk`).
+  - Nếu `currentState == STATE_IDLE` -> hiển thị giá trị DHT trên LCD.
+4
+- Kiểm tra ngập trong gara (garage flood) theo `GARAGE_READ_INTERVAL` hoặc recheck nhanh nếu đang ngập:
+  - Nếu khoảng cách <= `GARAGE_FLOOD_TRIGGER_CM` -> bật bơm (`setPumpState(true)`), `isGarageFlooded = true`, gửi event Blynk.
+  - Ngược lại -> tắt bơm khi nước rút; gửi dữ liệu nội bộ (`sendInternalFloodData`).
+5
+- Các lệnh Blynk (callback `BLYNK_WRITE(VPIN_GARAGE_DOOR)`):
+  - Chuẩn hóa giá trị -> 0 hoặc 1.
+  - Nếu giá trị yêu cầu khác trạng thái cửa hiện tại:
+    - `toggleGarageDoor()`; nếu trạng thái thay đổi -> gửi event Blynk mở/đóng, hiển thị trên LCD, `syncGarageDoorState(newState)`.
+    - Nếu motor đang hoạt động và trạng thái không đổi -> ghi log và `syncGarageDoorState(prevState)`.
+
+5) Trạng thái quan trọng & biến toàn cục
+- `currentState`: STATE_IDLE (0) hoặc STATE_ACCESS_MSG (1).
+- `isFlooded`: cảnh báo nước ngoài gara.
+- `isGarageFlooded`: cảnh báo nước trong gara.
+- `messageDisplayTime`: thời gian bắt đầu hiển thị thông báo LCD.
+- Timers: `previousMillis_DHT`, `previousMillis_Flood`, `previousMillis_Garage` cùng các INTERVAL hằng số (DHT_READ_INTERVAL, FLOOD_READ_INTERVAL, GARAGE_READ_INTERVAL).
+- Hàm đồng bộ lên Blynk: `syncGarageDoorState`, `sendBlynkLogEvent`, `sendFloodDataToBlynk`, `sendDHTDataToBlynk`, `sendInternalFloodData`.
+
+6) Kịch bản chính (sequence)
+A. Startup:
+  - Khởi động, init module, kết nối Blynk, hiển thị "Cho quet the..." trên LCD.
+
+B. Idle (không có thẻ, không có sự kiện):
+  - Vòng lặp: runBlynk, motor_loop, đọc DHT định kỳ và hiển thị, kiểm tra flood/garage định kỳ, gửi dữ liệu lên Blynk.
+
+C. Quét thẻ hợp lệ:
+  - Phát hiện UID -> isFamilyCard -> hiển thị "THE HOP LE" -> toggle cửa -> gửi sự kiện mở/đóng -> sync trạng thái -> chuyển STATE_ACCESS_MSG -> hiển thị thông báo trong LCD trong LCD_MSG_DURATION.
+
+D. Quét thẻ không hợp lệ:
+  - Hiển thị "THE KHONG HOP LE", beepFail, STATE_ACCESS_MSG, hiển thị trong LCD.
+
+E. Lệnh từ Blynk (mở/đóng):
+  - Nhận callback -> nếu khác trạng thái hiện tại -> toggle motor, ghi log, hiển thị trên LCD, sync trạng thái. Nếu motor bận -> ghi log và gửi trạng thái trước đó.
+
+F. Cảnh báo ngập bên ngoài:
+  - Khoảng cách <= ngưỡng -> mở servo thoát nước, set `isFlooded=true`, gửi event "nuoc_tran_vao_garage", gửi dữ liệu lên Blynk. Khi nước rút -> đóng servo, gửi event rút nước, `isFlooded=false`.
+
+G. Ngập trong gara:
+  - Khoảng cách trong gara <= ngưỡng -> bật bơm, `isGarageFlooded=true`, gửi event "gara_bi_ngap_nuoc". Khi nước rút -> tắt bơm, `isGarageFlooded=false`.
+
+7) Một số lưu ý (edge cases & sync)
+- Khi toggle cửa bằng `toggleGarageDoor()` cần kiểm tra motor đang hoạt động để tránh lệnh chồng chéo.
+- `BLYNK_WRITE` và quét thẻ đều có thể gọi `toggleGarageDoor()` -> đảm bảo hành vi duy nhất theo trạng thái motor.
+- `currentState` ngăn ghi đè LCD bởi luồng khác khi đang hiển thị thông báo truy cập.
+- Khoảng thời gian recheck khi đang ở trạng thái ngập nên ngắn hơn để phản hồi nhanh.
+
+8) Gợi ý mô tả cho flowchart
+- Bắt đầu -> Init modules -> Connect Blynk -> MAIN LOOP:
+  - Blynk+MotorLoop
+  - STATE_ACCESS_MSG? (timeout -> STATE_IDLE)
+  - STATE_IDLE? -> Check RFID -> (valid -> toggle, display, sync, goto STATE_ACCESS_MSG) (invalid -> beep, display, STATE_ACCESS_MSG)
+  - Check Flood Outside (interval) -> set servo + send Blynk
+  - Read DHT (interval) -> send Blynk + update LCD nếu IDLE
+  - Check Garage Flood (interval) -> set pump + send data
+  - Loop
+
+Kết thúc file.

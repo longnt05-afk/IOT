@@ -1,0 +1,88 @@
+# Mô tả flowchart SmartGarageV2
+//////////////////
+1. Bắt đầu (Start)
+////////////////////////
+2. Initialization (Init)       (Bỏ qua ko có trong flow chart)
+   - Khởi tạo Serial, LCD, DHT, RFID, Servo (flood door), Ultrasonic (ngoài & trong gara), Motor, Buzzer.
+   - Kết nối WiFi & Blynk.
+   - Hiển thị màn chào / "Chờ quét thẻ..." trên LCD.
+//////////////////////////////////////////////////////////
+3. Vòng lặp chính (MAIN LOOP) — vòng lặp lặp lại liên tục:
+   1. Chạy song song/tuần tự: `runBlynk()` và `motor_loop()` (luôn gọi mỗi vòng).
+
+   2. Kiểm tra trạng thái LCD thông báo:
+      - Nếu `currentState == STATE_ACCESS_MSG` và thời gian hiển thị > `LCD_MSG_DURATION` → đặt `currentState = STATE_IDLE`.
+
+   3. Nếu `currentState == STATE_IDLE` → Kiểm tra RFID (`checkNewCardUID()`):
+      - Không có UID → tiếp tục vòng lặp.
+      - Có UID → Kiểm tra `isFamilyCard(uid)`:
+        - Nếu hợp lệ:
+          - Hiển thị "THẺ HỢP LỆ" trên LCD, ghi `messageDisplayTime`.
+          - Gọi `toggleGarageDoor()` (kiểm tra motor busy trước khi thực hiện).
+          - Gửi event log lên Blynk (`sendBlynkLogEvent`), gọi `syncGarageDoorState(newState)`.
+          - Đặt `currentState = STATE_ACCESS_MSG`, `return` (dừng xử lý còn lại trong vòng này).
+        - Nếu không hợp lệ:
+          - Gọi `beepFail()`, hiển thị "THẺ KHÔNG HỢP LỆ", đặt `currentState = STATE_ACCESS_MSG`, `messageDisplayTime`, `return`.
+
+   4. Kiểm tra Flood ngoài (theo `FLOOD_READ_INTERVAL`; recheck nhanh khi đang báo ngập):
+      - Đọc ultrasonic ngoài → nếu khoảng cách <= `FLOOD_TRIGGER_DISTANCE_CM`:
+        - Mở servo flood door (`setFloodDoorAngle(FLOOD_SERVO_OPEN_ANGLE)`), `isFlooded = true`, gửi event Blynk "nuoc_tran_vao_garage".
+      - Ngược lại:
+        - Đóng servo, nếu trước đó `isFlooded == true` gửi event "nuoc_rut" và đặt `isFlooded = false`.
+      - Gửi dữ liệu flood lên Blynk (`sendFloodDataToBlynk`).
+
+   5. Đọc DHT (theo `DHT_READ_INTERVAL`):
+      - Đọc nhiệt độ/độ ẩm, gửi lên Blynk (`sendDHTDataToBlynk`).
+      - Nếu `currentState == STATE_IDLE` → cập nhật hiển thị DHT trên LCD.
+
+   6. Kiểm tra ngập trong gara (theo `GARAGE_READ_INTERVAL`; recheck nhanh nếu đang ngập):
+      - Đọc ultrasonic trong gara → nếu khoảng cách <= `GARAGE_FLOOD_TRIGGER_CM`:
+        - Bật bơm (`setPumpState(true)`), `isGarageFlooded = true`, gửi event Blynk "gara_bi_ngap_nuoc".
+      - Ngược lại:
+        - Tắt bơm nếu đang bật, nếu trước đó ngập thì gửi event rút nước, `isGarageFlooded = false`.
+      - Gửi dữ liệu nội bộ / lên Blynk (`sendInternalFloodData`).
+
+   7. Kết thúc vòng lặp → quay lại bước 3.
+
+
+
+
+/////////////////////////////////////////////////////////////////
+4. Xử lý callback Blynk (ví dụ `BLYNK_WRITE(VPIN_GARAGE_DOOR)`):
+   - Chuẩn hóa giá trị (0 hoặc 1).
+   - Nếu giá trị yêu cầu khác trạng thái hiện tại:
+     - Nếu motor không busy → `toggleGarageDoor()`, gửi event Blynk, hiển thị trên LCD, `syncGarageDoorState(newState)`.
+     - Nếu motor busy → ghi log, gọi `syncGarageDoorState(prevState)` (không chồng lệnh).
+   - Nếu giá trị giống trạng thái hiện tại → chỉ sync trạng thái / ghi log.
+
+
+
+
+
+
+
+5. Biến trạng thái quan trọng
+   - `currentState`: STATE_IDLE / STATE_ACCESS_MSG.
+   - `isFlooded`: trạng thái nước ngoài.
+   - `isGarageFlooded`: trạng thái nước trong gara.
+   - `messageDisplayTime`: timestamp bắt đầu hiển thị thông báo.
+   - Timers: `previousMillis_DHT`, `previousMillis_Flood`, `previousMillis_Garage`.
+   - Các hàm đồng bộ / báo: `syncGarageDoorState`, `sendBlynkLogEvent`, `sendFloodDataToBlynk`, `sendDHTDataToBlynk`, `sendInternalFloodData`.
+
+6. Các hàm chính
+   - `initSystem()`: khởi tạo hệ thống.
+    - `checkNewCardUID()`: kiểm tra thẻ RFID mới.
+    - `isFamilyCard(uid)`: kiểm tra thẻ hợp lệ.
+    - `toggleGarageDoor()`: mở/đóng cửa gara.
+    - `setFloodDoorAngle(angle)`: điều khiển servo flood door.
+    - `setPumpState(state)`: bật/tắt bơm.
+    - `beepFail()`: phát âm thanh báo lỗi.
+
+    - `readUltrasonicOutside()`, `readUltrasonicGarage()`: đọc cảm biến siêu âm.
+    - `readDHTSensor()`: đọc cảm biến DHT.
+
+7. Sơ đồ flowchart đề xuất (các block chính để vẽ)
+   - Start → Init → MAIN LOOP:
+     - runBlynk() & motor_loop() → Check STATE_ACCESS_MSG timeout → If IDLE → Check RFID → (Valid → Access flow) / (Invalid → Reject flow) → Flood outside check → DHT read → Garage flood check → loop
+   - Blynk handler ← callback song song với loop (điểm vào toggleGarageDoor có kiểm tra motor_busy).
+
