@@ -4,6 +4,8 @@
 
 **SmartGarageV2** là phiên bản nâng cấp của hệ thống Smart Garage, một dự án ứng dụng nhúng được xây dựng trên nền tảng vi điều khiển **ESP32** và môi trường **Arduino**, nhằm biến một nhà để xe (garage) truyền thống thành một không gian thông minh, tự động và an toàn hơn.
 
+Canva Link: https://canva.link/wn6i8pi35ebtml3 
+
 Hệ thống tích hợp các tính năng chính:
 
 - **Đóng/mở cửa garage bằng thẻ RFID** hoặc điều khiển từ xa qua ứng dụng **Blynk** (qua kết nối WiFi).
