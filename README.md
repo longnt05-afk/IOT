@@ -51,4 +51,4 @@ Sơ đồ dưới đây mô tả cách kết nối chi tiết giữa ESP32 và c
 
 ## 5. Tác giả
 
-Dự án được thực hiện bởi: **Long Nguyen**
+Dự án được thực hiện bởi: **Long Nguyen - LEADER**
